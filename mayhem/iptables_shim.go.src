@@ -1,0 +1,24 @@
+// mayhem/iptables_shim.go.src — a tiny stdlib-only stand-in for
+// github.com/openyurtio/openyurt/pkg/util/iptables, staged by mayhem/build.sh
+// into the _mayhem_harness/iptables mini-module at iptables/iptables.go.
+//
+// WHY: pkg/util/iptables/testing/parse.go's ONLY non-stdlib import is openyurt's
+// own pkg/util/iptables, and from it parse.go uses exactly TWO symbols — the
+// string types `iptables.Table` and `iptables.Chain` (see the `grep iptables.`
+// audit in build.sh: only Table/Chain type conversions, no funcs/constants).
+// The real package drags in k8s.io/apimachinery + k8s.io/klog + k8s.io/utils
+// (sets, version, wait, exec, trace), which would pull openyurt's entire
+// Kubernetes go.mod closure into the mini-module and defeat the point of
+// isolating a dependency-light surface. These two named string types are
+// behaviorally identical for parse.go's use (plain conversions + string
+// comparison), so the parsed dump/rule structures AND the oracle's exact values
+// are exactly what upstream produces. build.sh's sed only repoints parse.go's
+// import path at this shim; parse.go itself is copied verbatim (minus the
+// package rename).
+package iptables
+
+// Table represents an iptables table name (matches upstream's `type Table string`).
+type Table string
+
+// Chain represents an iptables chain name (matches upstream's `type Chain string`).
+type Chain string

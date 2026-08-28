@@ -1,0 +1,4 @@
+*filter
+:INPUT - [5:10]
+-A INPUT -s 10.0.0.0/8 -p tcp --dport 80 -j ACCEPT
+COMMIT

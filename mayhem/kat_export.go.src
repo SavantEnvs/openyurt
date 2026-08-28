@@ -1,0 +1,95 @@
+// mayhem/kat_export.go.src — known-answer harness for openyurt's iptables-save
+// dump / rule parser (pkg/util/iptables/testing/parse.go), exported so the
+// dynamically-linked KAT probe (mayhem/kat) can assert exact behavioral values.
+// Staged by mayhem/build.sh into the _mayhem_harness/iptables mini-module
+// alongside the verbatim copy of parse.go, so it reaches the REAL
+// ParseIPTablesDump / ParseRule code path — the same path the fuzz harness
+// exercises.
+//
+// This is the BEHAVIORAL oracle's engine. Every expected value is a documented
+// property of the parser and matches parse_test.go semantics:
+//   - a "*filter"/":INPUT - [5:10]"/"-A ..." dump parses to one table "filter"
+//     with one chain "INPUT" carrying packet/byte counters and one rule,
+//   - ParseRule decomposes "-A INPUT -s 10.0.0.0/8 -p tcp --dport 80 -j ACCEPT"
+//     into its typed fields (chain/source/protocol/dport/jump),
+//   - a leading "!" negates the following value (Negated=true).
+// When the program is neutered (LD_PRELOAD _exit(0)) the probe prints nothing,
+// every assertion in test.sh misses, and the oracle FAILS — which is the point.
+package iptparse
+
+// KAT holds the known-answer results computed through the real parser.
+type KAT struct {
+	// Dump-parse results.
+	TableCount int
+	TableName  string
+	ChainCount int
+	ChainName  string
+	Packets    uint64
+	Bytes      uint64
+	RuleCount  int
+
+	// Single-rule parse results.
+	RuleChain  string
+	RuleSource string
+	RuleProto  string
+	RuleDport  string
+	RuleJump   string
+
+	// Negation results.
+	NegDest    string
+	NegNegated bool
+	NegJump    string
+}
+
+// KATRun computes the oracle values through the real parser implementation.
+func KATRun() KAT {
+	out := KAT{}
+
+	const dump = "*filter\n" +
+		":INPUT - [5:10]\n" +
+		"-A INPUT -s 10.0.0.0/8 -p tcp --dport 80 -j ACCEPT\n" +
+		"COMMIT\n"
+	if d, err := ParseIPTablesDump(dump); err == nil && d != nil {
+		out.TableCount = len(d.Tables)
+		if len(d.Tables) > 0 {
+			t := d.Tables[0]
+			out.TableName = string(t.Name)
+			out.ChainCount = len(t.Chains)
+			if len(t.Chains) > 0 {
+				c := t.Chains[0]
+				out.ChainName = string(c.Name)
+				out.Packets = c.Packets
+				out.Bytes = c.Bytes
+				out.RuleCount = len(c.Rules)
+			}
+		}
+	}
+
+	if r, err := ParseRule("-A INPUT -s 10.0.0.0/8 -p tcp --dport 80 -j ACCEPT", false); err == nil && r != nil {
+		out.RuleChain = string(r.Chain)
+		if r.SourceAddress != nil {
+			out.RuleSource = r.SourceAddress.Value
+		}
+		if r.Protocol != nil {
+			out.RuleProto = r.Protocol.Value
+		}
+		if r.DestinationPort != nil {
+			out.RuleDport = r.DestinationPort.Value
+		}
+		if r.Jump != nil {
+			out.RuleJump = r.Jump.Value
+		}
+	}
+
+	if r, err := ParseRule("-A OUTPUT ! -d 1.2.3.4 -j DROP", false); err == nil && r != nil {
+		if r.DestinationAddress != nil {
+			out.NegDest = r.DestinationAddress.Value
+			out.NegNegated = r.DestinationAddress.Negated
+		}
+		if r.Jump != nil {
+			out.NegJump = r.Jump.Value
+		}
+	}
+
+	return out
+}

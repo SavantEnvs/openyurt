@@ -1,0 +1,4 @@
+*filter
+:FOO - [0:0]
+-X FOO
+COMMIT

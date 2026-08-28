@@ -1,0 +1,68 @@
+// mayhem/harness_parse.go.src — native testing.F harness for openyurt's
+// iptables-save dump / rule parser (pkg/util/iptables/testing/parse.go). Staged
+// by mayhem/build.sh into a fresh STANDALONE Go mini-module
+// (_mayhem_harness/iptables) that holds a verbatim copy of parse.go (with its
+// package renamed to `iptparse` and its ONE non-stdlib import — openyurt's
+// pkg/util/iptables — repointed to a tiny local shim providing just the Table
+// and Chain string types), so go-118-fuzz-build builds the REAL
+// ParseIPTablesDump / ParseRule code WITHOUT dragging in openyurt's giant
+// Kubernetes go.mod closure (apimachinery, client-go, aliyun sdk, edgex…).
+//
+// Declared `package iptparse` (the mini-module's package) so it reaches the real
+// ParseIPTablesDump / ParseRule / IPTablesDump.String() code paths directly —
+// go-118-fuzz-build rewrites this into an ordinary non-test .go file.
+//
+// Byte-in, NO file I/O (netnew §3): the fuzzer's bytes are fed straight to the
+// dump parser (a line-oriented iptables-save grammar) and each non-empty line is
+// also fed to ParseRule; a successful dump is round-tripped through String() and
+// GetTable/GetChain. Nothing must ever panic on any input, valid or garbage.
+// Starter seeds are Mayhem's job via the Mayhemfile testsuite: directive.
+package iptparse
+
+import (
+	"strings"
+	"testing"
+)
+
+// FuzzParse drives the whole parser surface with the fuzzer's raw bytes.
+func FuzzParse(f *testing.F) {
+	f.Add([]byte("*filter\n:INPUT - [5:10]\n-A INPUT -s 10.0.0.0/8 -p tcp --dport 80 -j ACCEPT\nCOMMIT\n"))
+	f.Add([]byte("*nat\n:PREROUTING - [0:0]\n-A PREROUTING ! -d 1.2.3.4 -j DNAT --to-destination 5.6.7.8\nCOMMIT\n"))
+	f.Add([]byte("-A INPUT -m tcp -p tcp --dport 443 -j ACCEPT"))
+	f.Add([]byte("*filter\n:FOO - [0:0]\n-X FOO\nCOMMIT\n"))
+	f.Add([]byte(""))
+
+	f.Fuzz(func(_ *testing.T, data []byte) {
+		s := string(data)
+
+		// 1) Full iptables-save dump parse. On success, round-trip through the
+		//    String() serializer and re-parse it (must not panic), and probe the
+		//    table/chain lookups.
+		if dump, err := ParseIPTablesDump(s); err == nil && dump != nil {
+			out := dump.String()
+			_, _ = ParseIPTablesDump(out)
+			for _, t := range dump.Tables {
+				_, _ = dump.GetTable(t.Name)
+				for _, c := range t.Chains {
+					_, _ = dump.GetChain(t.Name, c.Name)
+				}
+			}
+		}
+
+		// 2) Per-line single-rule parse, in both strict and non-strict modes.
+		for _, line := range strings.Split(s, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			if r, err := ParseRule(line, false); err == nil && r != nil {
+				_ = r.Chain
+				if r.SourceAddress != nil {
+					_ = r.SourceAddress.Matches("x")
+					_ = r.SourceAddress.String()
+				}
+			}
+			_, _ = ParseRule(line, true)
+		}
+	})
+}
